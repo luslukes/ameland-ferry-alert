@@ -21,7 +21,7 @@ CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 STATE_PATH = Path(__file__).resolve().parent / "state.json"
 REQUEST_TIMEOUT_SECONDS = 30
 
-REQUIRED_CONFIG_KEYS = ("date", "time", "route")
+REQUIRED_CONFIG_KEYS = ("date", "time", "route", "licenseNumber", "vehicleLength")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict[str, str]:
+def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     """Load and validate configuration from config.json."""
     logger.info("Loading configuration from %s", path)
 
@@ -84,19 +84,27 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, str]:
             f"Missing required configuration value(s): {', '.join(missing_keys)}"
         )
 
-    for key in REQUIRED_CONFIG_KEYS:
+    for key in ("date", "time", "route", "licenseNumber"):
         value = config[key]
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"Configuration value '{key}' must be a non-empty string.")
+
+    vehicle_length = config["vehicleLength"]
+    if isinstance(vehicle_length, bool) or not isinstance(vehicle_length, (int, float)):
+        raise ConfigError("Configuration value 'vehicleLength' must be a number.")
+    if vehicle_length <= 0:
+        raise ConfigError("Configuration value 'vehicleLength' must be greater than zero.")
 
     parse_date(config["date"])
     parse_time(config["time"], "time")
 
     logger.info(
-        "Configuration loaded: date=%s, time=%s, route=%s",
+        "Configuration loaded: date=%s, time=%s, route=%s, vehicle=%s (%sm)",
         config["date"],
         config["time"],
         config["route"],
+        config["licenseNumber"],
+        config["vehicleLength"],
     )
     return config
 
@@ -154,18 +162,28 @@ def parse_time(value: str, field_name: str) -> time:
         ) from exc
 
 
-def build_api_payload(config: dict[str, str]) -> dict[str, Any]:
+def build_api_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Build the request body for the WPD departures endpoint."""
     return {
         "dateTime": config["date"],
         "isAmendment": False,
         "isGroupBooking": False,
-        "resources": [{"type": "A", "resourceType": "Ferry"}],
+        "resources": [
+            {"type": "A", "resourceType": "Ferry"},
+            {"type": "A", "resourceType": "Ferry"},
+            {"type": "I", "resourceType": "Ferry"},
+            {"type": "I", "resourceType": "Ferry"},
+            {
+                "licenseNumber": config["licenseNumber"],
+                "length": config["vehicleLength"],
+                "resourceType": "Car",
+            },
+        ],
         "route": config["route"],
     }
 
 
-def fetch_departures(config: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_departures(config: dict[str, Any]) -> list[dict[str, Any]]:
     """Call the WPD API and return the list of departures."""
     payload = build_api_payload(config)
     logger.info("Requesting departures from %s", API_URL)
@@ -218,7 +236,7 @@ def parse_departure_start(departure: dict[str, Any]) -> datetime | None:
 
 def find_departure(
     departures: list[dict[str, Any]],
-    config: dict[str, str],
+    config: dict[str, Any],
 ) -> dict[str, Any]:
     """Find the configured departure in the API response."""
     target_date = parse_date(config["date"])
@@ -259,7 +277,7 @@ def get_ntfy_topic() -> str:
     return topic
 
 
-def build_notification_message(config: dict[str, str]) -> str:
+def build_notification_message(config: dict[str, Any]) -> str:
     """Build the ntfy notification message body."""
     return (
         "🚢 Ameland Ferry Available\n\n"
@@ -270,7 +288,7 @@ def build_notification_message(config: dict[str, str]) -> str:
     )
 
 
-def send_availability_notification(config: dict[str, str]) -> None:
+def send_availability_notification(config: dict[str, Any]) -> None:
     """Send an ntfy notification that the departure is available."""
     topic = get_ntfy_topic()
     message = build_notification_message(config)
@@ -306,7 +324,7 @@ def update_state(
     *,
     available: bool,
     notify: bool,
-    config: dict[str, str],
+    config: dict[str, Any],
 ) -> None:
     """Update state and send a notification when the departure becomes available."""
     status = "available" if available else "fully_booked"

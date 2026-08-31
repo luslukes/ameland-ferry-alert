@@ -36,15 +36,19 @@ Edit `config.json` to set the departure you want to monitor:
 {
   "date": "2026-09-04",
   "time": "08:30",
-  "route": "HOAM"
+  "route": "HOAM",
+  "licenseNumber": "K CL 2815",
+  "vehicleLength": 5
 }
 ```
 
-| Field   | Description                                        |
-|---------|----------------------------------------------------|
-| `date`  | Travel date in `YYYY-MM-DD` format                 |
-| `time`  | Departure time in `HH:MM` format                   |
-| `route` | Ferry route code (e.g. `HOAM` for Holwerd–Ameland) |
+| Field           | Description                                        |
+|-----------------|----------------------------------------------------|
+| `date`          | Travel date in `YYYY-MM-DD` format                 |
+| `time`          | Departure time in `HH:MM` format                   |
+| `route`         | Ferry route code (e.g. `HOAM` for Holwerd–Ameland) |
+| `licenseNumber` | Vehicle license plate as used on the WPD website   |
+| `vehicleLength` | Vehicle length in metres                           |
 
 ## Execution
 

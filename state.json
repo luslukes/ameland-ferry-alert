@@ -1,5 +1,5 @@
 {
-  "notification_sent": true,
-  "last_status": "available",
-  "last_checked": "2026-08-31T23:47:30"
+  "notification_sent": false,
+  "last_status": "fully_booked",
+  "last_checked": "2026-09-01T01:48:02"
 }
