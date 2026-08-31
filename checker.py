@@ -302,6 +302,9 @@ def send_availability_email(config: dict[str, str], departure: dict[str, Any]) -
     try:
         with smtplib.SMTP(settings["host"], int(settings["port"])) as smtp:
             smtp.starttls()
+            print(f"SMTP Host: {settings['host']}")
+            print(f"SMTP Port: {settings['port']}")
+            print(f"SMTP User: {settings['user']}")
             smtp.login(settings["user"], settings["password"])
             smtp.send_message(message)
     except OSError as exc:
