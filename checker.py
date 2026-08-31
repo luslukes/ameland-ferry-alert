@@ -7,10 +7,8 @@ import argparse
 import json
 import logging
 import os
-import smtplib
 import sys
 from datetime import datetime, time
-from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +44,7 @@ class DepartureNotFoundError(Exception):
 
 
 class NotificationError(Exception):
-    """Raised when an email notification cannot be sent."""
+    """Raised when an ntfy notification cannot be sent."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--notify",
         action="store_true",
-        help="Send an email when the departure becomes available.",
+        help="Send an ntfy notification when the departure becomes available.",
     )
     return parser.parse_args()
 
@@ -253,63 +251,54 @@ def is_available(departure: dict[str, Any]) -> bool:
     return departure.get("isBookable") is True
 
 
-def get_smtp_settings() -> dict[str, str]:
-    """Read SMTP settings from environment variables."""
-    required = ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO")
-    missing = [name for name in required if not os.environ.get(name)]
-    if missing:
-        raise NotificationError(
-            f"Missing email environment variable(s): {', '.join(missing)}"
-        )
-
-    return {
-        "host": os.environ["SMTP_HOST"],
-        "port": os.environ.get("SMTP_PORT", "587"),
-        "user": os.environ["SMTP_USER"],
-        "password": os.environ["SMTP_PASSWORD"],
-        "email_from": os.environ["EMAIL_FROM"],
-        "email_to": os.environ["EMAIL_TO"],
-    }
+def get_ntfy_topic() -> str:
+    """Read the ntfy topic from environment variables."""
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if not topic:
+        raise NotificationError("Missing environment variable: NTFY_TOPIC")
+    return topic
 
 
-def send_availability_email(config: dict[str, str], departure: dict[str, Any]) -> None:
-    """Send an email notification that the departure is available."""
-    settings = get_smtp_settings()
-    ship_code = departure.get("shipCode", "unknown")
-    available_weight = departure.get("availableWeight", "n/a")
-
-    subject = (
-        f"Ameland ferry available: {config['route']} "
-        f"{config['date']} {config['time']}"
-    )
-    body = (
-        "A vehicle slot is available on your monitored ferry departure.\n\n"
+def build_notification_message(config: dict[str, str]) -> str:
+    """Build the ntfy notification message body."""
+    return (
+        "🚢 Ameland Ferry Available\n\n"
         f"Route: {config['route']}\n"
         f"Date: {config['date']}\n"
-        f"Time: {config['time']}\n"
-        f"Ship: {ship_code}\n"
-        f"Available weight: {available_weight}\n"
+        f"Time: {config['time']}\n\n"
+        "The monitored ferry is available again."
     )
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = settings["email_from"]
-    message["To"] = settings["email_to"]
-    message.set_content(body)
 
-    logger.info("Sending availability email to %s", settings["email_to"])
+def send_availability_notification(config: dict[str, str]) -> None:
+    """Send an ntfy notification that the departure is available."""
+    topic = get_ntfy_topic()
+    message = build_notification_message(config)
+    url = f"https://ntfy.sh/{topic}"
+
+    logger.info("Sending availability notification to %s", url)
 
     try:
-        with smtplib.SMTP(settings["host"], int(settings["port"])) as smtp:
-            smtp.starttls()
-            smtp.login(settings["user"], settings["password"])
-            smtp.send_message(message)
-    except OSError as exc:
-        raise NotificationError(f"Failed to send email: {exc}") from exc
-    except smtplib.SMTPException as exc:
-        raise NotificationError(f"SMTP error while sending email: {exc}") from exc
+        response = requests.post(
+            url,
+            data=message.encode("utf-8"),
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+    except Timeout as exc:
+        raise NotificationError("Request timed out while sending ntfy notification.") from exc
+    except RequestsConnectionError as exc:
+        raise NotificationError("Network error while sending ntfy notification.") from exc
+    except RequestException as exc:
+        raise NotificationError(f"Failed to send ntfy notification: {exc}") from exc
 
-    logger.info("Availability email sent successfully")
+    if not response.ok:
+        detail = response.text.strip() or "No response body"
+        raise NotificationError(
+            f"ntfy error (HTTP {response.status_code}): {detail[:500]}"
+        )
+
+    logger.info("Availability notification sent successfully")
 
 
 def update_state(
@@ -318,14 +307,13 @@ def update_state(
     available: bool,
     notify: bool,
     config: dict[str, str],
-    departure: dict[str, Any],
 ) -> None:
     """Update state and send a notification when the departure becomes available."""
     status = "available" if available else "fully_booked"
 
     if available and not state.get("notification_sent"):
         if notify:
-            send_availability_email(config, departure)
+            send_availability_notification(config)
             state["notification_sent"] = True
             logger.info("Marked departure as notified")
     elif not available:
@@ -357,7 +345,6 @@ def main() -> int:
             available=available,
             notify=args.notify,
             config=config,
-            departure=departure,
         )
 
         return 0 if available else 1

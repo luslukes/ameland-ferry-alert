@@ -82,47 +82,49 @@ or
 FULLY BOOKED
 ```
 
-## Email notifications
+## Notifications
 
-To send an email when the departure becomes available, run with `--notify`:
+To send an ntfy notification when the departure becomes available, run with `--notify`:
 
 ```bash
 python checker.py --notify
 ```
 
-Set these environment variables:
+Set this environment variable:
 
-| Variable        | Description                    |
-|-----------------|--------------------------------|
-| `SMTP_HOST`     | SMTP server hostname           |
-| `SMTP_PORT`     | SMTP port (default: `587`)     |
-| `SMTP_USER`     | SMTP username                  |
-| `SMTP_PASSWORD` | SMTP password                  |
-| `EMAIL_FROM`    | Sender email address           |
-| `EMAIL_TO`      | Recipient email address        |
+| Variable     | Description                          |
+|--------------|--------------------------------------|
+| `NTFY_TOPIC` | Your ntfy.sh topic name              |
 
-Notifications are sent only once per availability period. State is stored in `state.json`:
+Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` with this message:
 
-- When the departure becomes available, an email is sent and `notification_sent` is set to `true`.
-- While the departure stays available, no further emails are sent.
-- When the departure becomes fully booked again, `notification_sent` resets to `false`, so a new email is sent if it becomes available again.
+```
+🚢 Ameland Ferry Available
+
+Route: HOAM
+Date: 2026-09-04
+Time: 08:30
+
+The monitored ferry is available again.
+```
+
+Notifications are sent only when `isBookable == true` and `notification_sent == false`. State is stored in `state.json`:
+
+- When the departure becomes available, a notification is sent and `notification_sent` is set to `true`.
+- While the departure stays available, no further notifications are sent.
+- When the departure becomes fully booked again, `notification_sent` resets to `false`, so a new notification is sent if it becomes available again.
 
 ## GitHub Actions
 
 A workflow in `.github/workflows/monitor.yml` runs every 5 minutes and:
 
 1. Checks the configured departure
-2. Sends an email if it becomes available (using repository secrets)
+2. Sends an ntfy notification if it becomes available (using repository secrets)
 3. Commits updated `state.json` to prevent duplicate notifications
 
-### Required repository secrets
+### Required repository secret
 
-- `SMTP_HOST`
-- `SMTP_PORT` (optional, defaults to `587`)
-- `SMTP_USER`
-- `SMTP_PASSWORD`
-- `EMAIL_FROM`
-- `EMAIL_TO`
+- `NTFY_TOPIC`
 
 ## Error handling
 
@@ -133,6 +135,6 @@ The script handles common failure cases and writes details to the log:
 - HTTP errors from the API
 - Invalid JSON responses
 - Configured departure not found
-- Email delivery failures (with `--notify`)
+- Notification delivery failures (with `--notify`)
 
 Errors are printed to `stderr` and the script exits with code `2`.
