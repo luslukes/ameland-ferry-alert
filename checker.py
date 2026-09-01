@@ -365,7 +365,14 @@ def main() -> int:
             config=config,
         )
 
-        return 0 if available else 1
+        if available:
+        print("AVAILABLE")
+        else:
+        print("FULLY BOOKED")
+
+ 
+
+return 0
     except (ConfigError, ApiError, DepartureNotFoundError, NotificationError) as exc:
         logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
