@@ -1,6 +1,6 @@
 # ameland-ferry-alert
 
-Monitor a specific Ameland ferry departure and get notified when a vehicle slot becomes available.
+Monitor Ameland ferry departures and get notified when vehicle slots become available.
 
 ## Requirements
 
@@ -30,14 +30,24 @@ Monitor a specific Ameland ferry departure and get notified when a vehicle slot 
 
 ## Configuration
 
-Edit `config.json` to set the departure you want to monitor:
+Edit `config.json` to set the departures you want to monitor:
 
 ```json
 {
   "date": "2026-09-04",
-  "time": "08:30",
+  "times": [
+    "07:15",
+    "08:30",
+    "09:45",
+    "11:00",
+    "12:15",
+    "13:30",
+    "14:45",
+    "16:00",
+    "17:15"
+  ],
   "route": "HOAM",
-  "licenseNumber": "K CL 2815",
+  "licenseNumber": "K TW 3741",
   "vehicleLength": 5
 }
 ```
@@ -45,7 +55,7 @@ Edit `config.json` to set the departure you want to monitor:
 | Field           | Description                                        |
 |-----------------|----------------------------------------------------|
 | `date`          | Travel date in `YYYY-MM-DD` format                 |
-| `time`          | Departure time in `HH:MM` format                   |
+| `times`         | List of departure times to monitor (`HH:MM`)       |
 | `route`         | Ferry route code (e.g. `HOAM` for Holwerd–Ameland) |
 | `licenseNumber` | Vehicle license plate as used on the WPD website   |
 | `vehicleLength` | Vehicle length in metres                           |
@@ -62,33 +72,34 @@ The script will:
 
 1. Load `config.json`
 2. Query the WPD API for departures on the configured date and route
-3. Find the departure matching the configured time
-4. Print `AVAILABLE` or `FULLY BOOKED`
+3. Check every configured departure time
+4. Print availability for each departure
 5. Update `state.json` to track notification status
 
 ### Exit codes
 
-| Code | Meaning                                      |
-|------|----------------------------------------------|
-| `0`  | Departure is available (`isBookable == true`)  |
-| `1`  | Departure is fully booked                    |
-| `2`  | Error (config, API, or notification failure)   |
+| Code | Meaning                                    |
+|------|--------------------------------------------|
+| `0`  | Successful execution                       |
+| `2`  | Error (config, API, or notification failure) |
 
 ### Example output
 
 ```
-AVAILABLE
-```
-
-or
-
-```
-FULLY BOOKED
+07:15 AVAILABLE
+08:30 FULLY BOOKED
+09:45 FULLY BOOKED
+11:00 FULLY BOOKED
+12:15 FULLY BOOKED
+13:30 FULLY BOOKED
+14:45 FULLY BOOKED
+16:00 FULLY BOOKED
+17:15 FULLY BOOKED
 ```
 
 ## Notifications
 
-To send an ntfy notification when the departure becomes available, run with `--notify`:
+To send an ntfy notification when departures become available, run with `--notify`:
 
 ```bash
 python checker.py --notify
@@ -105,25 +116,28 @@ Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` with this mess
 ```
 🚢 Ameland Ferry Available
 
+Available departures:
+
+07:15
+13:30
+
 Route: HOAM
 Date: 2026-09-04
-Time: 08:30
-
-The monitored ferry is available again.
+Vehicle: K TW 3741
 ```
 
-Notifications are sent only when `isBookable == true` and `notification_sent == false`. State is stored in `state.json`:
+Notifications are sent only when at least one departure is bookable and `notification_sent == false`. State is stored in `state.json`:
 
-- When the departure becomes available, a notification is sent and `notification_sent` is set to `true`.
-- While the departure stays available, no further notifications are sent.
-- When the departure becomes fully booked again, `notification_sent` resets to `false`, so a new notification is sent if it becomes available again.
+- When one or more departures become available, a single notification is sent and `notification_sent` is set to `true`.
+- While any departure stays available, no further notifications are sent.
+- When all departures are fully booked again, `notification_sent` resets to `false`, so a new notification is sent if availability returns.
 
 ## GitHub Actions
 
-A workflow in `.github/workflows/monitor.yml` runs every 5 minutes and:
+A workflow in `.github/workflows/monitor.yml` runs every 15 minutes and:
 
-1. Checks the configured departure
-2. Sends an ntfy notification if it becomes available (using repository secrets)
+1. Checks all configured departures
+2. Sends one ntfy notification if any become available (using repository secrets)
 3. Commits updated `state.json` to prevent duplicate notifications
 
 ### Required repository secret

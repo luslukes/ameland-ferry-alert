@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor a specific Ameland ferry departure via the WPD API."""
+"""Monitor Ameland ferry departures via the WPD API."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 STATE_PATH = Path(__file__).resolve().parent / "state.json"
 REQUEST_TIMEOUT_SECONDS = 30
 
-REQUIRED_CONFIG_KEYS = ("date", "time", "route", "licenseNumber", "vehicleLength")
+REQUIRED_CONFIG_KEYS = ("date", "times", "route", "licenseNumber", "vehicleLength")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,22 +41,31 @@ class ApiError(Exception):
 
 
 class DepartureNotFoundError(Exception):
-    """Raised when the configured departure cannot be found."""
+    """Raised when a configured departure cannot be found."""
 
 
 class NotificationError(Exception):
     """Raised when an ntfy notification cannot be sent."""
 
 
+@dataclass(frozen=True)
+class DepartureResult:
+    """Availability result for a configured departure time."""
+
+    time_label: str
+    available: bool
+    departure: dict[str, Any]
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Monitor a specific Ameland ferry departure."
+        description="Monitor Ameland ferry departures."
     )
     parser.add_argument(
         "--notify",
         action="store_true",
-        help="Send an ntfy notification when the departure becomes available.",
+        help="Send an ntfy notification when departures become available.",
     )
     return parser.parse_args()
 
@@ -84,10 +94,23 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
             f"Missing required configuration value(s): {', '.join(missing_keys)}"
         )
 
-    for key in ("date", "time", "route", "licenseNumber"):
+    for key in ("date", "route", "licenseNumber"):
         value = config[key]
         if not isinstance(value, str) or not value.strip():
             raise ConfigError(f"Configuration value '{key}' must be a non-empty string.")
+
+    times = config["times"]
+    if not isinstance(times, list) or not times:
+        raise ConfigError("Configuration value 'times' must be a non-empty array.")
+
+    validated_times: list[str] = []
+    for index, time_value in enumerate(times):
+        if not isinstance(time_value, str) or not time_value.strip():
+            raise ConfigError(
+                f"Configuration value 'times[{index}]' must be a non-empty string."
+            )
+        parse_time(time_value, f"times[{index}]")
+        validated_times.append(time_value)
 
     vehicle_length = config["vehicleLength"]
     if isinstance(vehicle_length, bool) or not isinstance(vehicle_length, (int, float)):
@@ -96,12 +119,12 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise ConfigError("Configuration value 'vehicleLength' must be greater than zero.")
 
     parse_date(config["date"])
-    parse_time(config["time"], "time")
+    config["times"] = validated_times
 
     logger.info(
-        "Configuration loaded: date=%s, time=%s, route=%s, vehicle=%s (%sm)",
+        "Configuration loaded: date=%s, times=%s, route=%s, vehicle=%s (%sm)",
         config["date"],
-        config["time"],
+        ", ".join(config["times"]),
         config["route"],
         config["licenseNumber"],
         config["vehicleLength"],
@@ -234,14 +257,16 @@ def parse_departure_start(departure: dict[str, Any]) -> datetime | None:
         return None
 
 
-def find_departure(
+def find_departure_for_time(
     departures: list[dict[str, Any]],
-    config: dict[str, Any],
+    *,
+    date: str,
+    route: str,
+    time_label: str,
 ) -> dict[str, Any]:
-    """Find the configured departure in the API response."""
-    target_date = parse_date(config["date"])
-    target_time = parse_time(config["time"], "time")
-    target_route = config["route"]
+    """Find a departure matching the configured date, route, and time."""
+    target_date = parse_date(date)
+    target_time = parse_time(time_label, "time")
 
     for departure in departures:
         if not isinstance(departure, dict):
@@ -254,19 +279,46 @@ def find_departure(
         if (
             start_dt.date() == target_date
             and start_dt.time() == target_time
-            and departure.get("route") == target_route
+            and departure.get("route") == route
         ):
-            logger.info("Found configured departure at %s %s", config["date"], config["time"])
+            logger.info("Found departure at %s %s", date, time_label)
             return departure
 
     raise DepartureNotFoundError(
-        f"No departure found for {config['route']} on {config['date']} at {config['time']}."
+        f"No departure found for {route} on {date} at {time_label}."
     )
 
 
-def is_available(departure: dict[str, Any]) -> bool:
-    """A departure is available when isBookable is true."""
-    return departure.get("isBookable") is True
+def check_configured_departures(
+    departures: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> list[DepartureResult]:
+    """Check availability for every configured departure time."""
+    results: list[DepartureResult] = []
+
+    for time_label in config["times"]:
+        departure = find_departure_for_time(
+            departures,
+            date=config["date"],
+            route=config["route"],
+            time_label=time_label,
+        )
+        results.append(
+            DepartureResult(
+                time_label=time_label,
+                available=departure.get("isBookable") is True,
+                departure=departure,
+            )
+        )
+
+    return results
+
+
+def print_results(results: list[DepartureResult]) -> None:
+    """Print availability for each configured departure."""
+    for result in results:
+        status = "AVAILABLE" if result.available else "FULLY BOOKED"
+        print(f"{result.time_label} {status}")
 
 
 def get_ntfy_topic() -> str:
@@ -277,21 +329,29 @@ def get_ntfy_topic() -> str:
     return topic
 
 
-def build_notification_message(config: dict[str, Any]) -> str:
+def build_notification_message(
+    config: dict[str, Any],
+    available_times: list[str],
+) -> str:
     """Build the ntfy notification message body."""
+    times_block = "\n".join(available_times)
     return (
         "🚢 Ameland Ferry Available\n\n"
+        "Available departures:\n\n"
+        f"{times_block}\n\n"
         f"Route: {config['route']}\n"
         f"Date: {config['date']}\n"
-        f"Time: {config['time']}\n\n"
-        "The monitored ferry is available again."
+        f"Vehicle: {config['licenseNumber']}"
     )
 
 
-def send_availability_notification(config: dict[str, Any]) -> None:
-    """Send an ntfy notification that the departure is available."""
+def send_availability_notification(
+    config: dict[str, Any],
+    available_times: list[str],
+) -> None:
+    """Send an ntfy notification listing available departures."""
     topic = get_ntfy_topic()
-    message = build_notification_message(config)
+    message = build_notification_message(config, available_times)
     url = f"https://ntfy.sh/{topic}"
 
     logger.info("Sending availability notification to %s", url)
@@ -322,23 +382,26 @@ def send_availability_notification(config: dict[str, Any]) -> None:
 def update_state(
     state: dict[str, Any],
     *,
-    available: bool,
+    results: list[DepartureResult],
     notify: bool,
     config: dict[str, Any],
 ) -> None:
-    """Update state and send a notification when the departure becomes available."""
-    status = "available" if available else "fully_booked"
+    """Update state and send a notification when departures become available."""
+    available_times = [result.time_label for result in results if result.available]
+    any_available = bool(available_times)
+    status = "available" if any_available else "fully_booked"
 
-    if available and not state.get("notification_sent"):
+    if any_available and not state.get("notification_sent"):
         if notify:
-            send_availability_notification(config)
+            send_availability_notification(config, available_times)
             state["notification_sent"] = True
-            logger.info("Marked departure as notified")
-    elif not available:
+            logger.info("Marked departures as notified")
+    elif not any_available:
         state["notification_sent"] = False
-        logger.info("Departure unavailable, notification flag reset")
+        logger.info("All departures fully booked, notification flag reset")
 
     state["last_status"] = status
+    state["last_available_times"] = available_times
     state["last_checked"] = datetime.now().isoformat(timespec="seconds")
     save_state(state)
 
@@ -353,26 +416,18 @@ def main() -> int:
         config = load_config()
         state = load_state()
         departures = fetch_departures(config)
-        departure = find_departure(departures, config)
-        available = is_available(departure)
+        results = check_configured_departures(departures, config)
 
-        print("AVAILABLE" if available else "FULLY BOOKED")
+        print_results(results)
 
         update_state(
             state,
-            available=available,
+            results=results,
             notify=args.notify,
             config=config,
         )
 
-        if available:
-        print("AVAILABLE")
-        else:
-        print("FULLY BOOKED")
-
- 
-
-return 0
+        return 0
     except (ConfigError, ApiError, DepartureNotFoundError, NotificationError) as exc:
         logger.error("%s", exc)
         print(f"Error: {exc}", file=sys.stderr)
