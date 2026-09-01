@@ -1,9 +1,9 @@
 {
-  "notification_sent": true,
+  "notification_sent": false,
   "last_status": "available",
-  "last_checked": "2026-09-01T21:21:15",
+  "last_checked": "2026-09-01T23:23:16",
   "last_available_times": [
     "07:15"
   ],
-  "last_available_departures": "2026-09-11 (AMHO)\n06:00\n\n2026-09-12 (AMHO)\n06:00\n13:30\n14:45\n16:00\n18:30"
+  "last_available_departures": "2026-09-11 (AMHO)\n06:00\n07:15\n\n2026-09-12 (AMHO)\n06:00\n13:30\n14:45\n16:00\n18:30"
 }

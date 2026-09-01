@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,6 @@ API_URL = "https://api.wpd.nl/api/v1/Departures/available"
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 STATE_PATH = Path(__file__).resolve().parent / "state.json"
 REQUEST_TIMEOUT_SECONDS = 30
-IGNORED_DEPARTURE_TIME = time(7, 15)
 
 REQUIRED_CONFIG_KEYS = ("trips", "licenseNumber", "vehicleLength")
 
@@ -296,11 +295,6 @@ def parse_departure_start(departure: dict[str, Any]) -> datetime | None:
         return None
 
 
-def should_ignore_departure(start_dt: datetime) -> bool:
-    """Ignore the 07:15 test departure."""
-    return start_dt.time() == IGNORED_DEPARTURE_TIME
-
-
 def collect_departure_results(config: dict[str, Any]) -> list[DepartureResult]:
     """Fetch and evaluate all API departures for the configured trips."""
     results: list[DepartureResult] = []
@@ -326,14 +320,6 @@ def collect_departure_results(config: dict[str, Any]) -> list[DepartureResult]:
                     logger.warning(
                         "Skipping departure with invalid startDate: %s",
                         departure,
-                    )
-                    continue
-
-                if should_ignore_departure(start_dt):
-                    logger.info(
-                        "Ignoring test departure at %s on %s",
-                        start_dt.strftime("%H:%M"),
-                        trip.route,
                     )
                     continue
 
