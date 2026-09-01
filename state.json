@@ -1,8 +1,18 @@
 {
-  "notification_sent": true,
+  "notification_sent": false,
   "last_status": "available",
-  "last_checked": "2026-09-01T00:28:26",
+  "last_checked": "2026-09-01T23:05:13",
   "last_available_times": [
     "07:15"
+  ],
+  "last_available_departures": [
+    "2026-09-11 19:45",
+    "2026-09-12 09:45",
+    "2026-09-12 11:00",
+    "2026-09-12 13:30",
+    "2026-09-12 14:45",
+    "2026-09-12 16:00",
+    "2026-09-12 17:15",
+    "2026-09-12 19:45"
   ]
 }
