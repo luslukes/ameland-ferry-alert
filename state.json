@@ -1,7 +1,7 @@
 {
-  "notification_sent": false,
+  "notification_sent": true,
   "last_status": "available",
-  "last_checked": "2026-09-01T02:19:05",
+  "last_checked": "2026-09-01T00:28:26",
   "last_available_times": [
     "07:15"
   ]
