@@ -105,38 +105,36 @@ Set this environment variable:
 |--------------|--------------------------------------|
 | `NTFY_TOPIC` | Your ntfy.sh topic name              |
 
-Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` with available departures grouped by date and route:
+Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` when at least one **new** departure becomes available. The message lists **all** currently available departures, grouped by date and route:
 
 ```
 🚢 Ameland Ferry Available
 
-2026-09-04 (HOAM)
-11:00
-13:30
+New availability detected.
+
+Currently available departures:
 
 2026-09-11 (AMHO)
-14:45
-
-2026-09-12 (AMHO)
-09:45
+06:00
+07:15
 16:00
 
 Vehicle: K TW 3741
 ```
 
-Notifications are sent only when at least one departure is bookable and `notification_sent == false`. State is stored in `state.json`:
+Notification state is stored in `state.json` as the set of currently available departures:
 
-- When one or more departures become available, a single notification is sent and `notification_sent` is set to `true`.
-- While any departure stays available, no further notifications are sent.
-- When all departures are fully booked again, `notification_sent` resets to `false`, so a new notification is sent if availability returns.
+- When new departures become available, a notification is sent listing every currently available slot.
+- If availability stays the same or departures disappear, no notification is sent.
+- The stored `available_departures` list is always updated to match the current API result.
 
 ## GitHub Actions
 
 A workflow in `.github/workflows/monitor.yml` runs every 15 minutes and:
 
 1. Checks all API departures for the configured routes and dates
-2. Sends one ntfy notification if any become available (using repository secrets)
-3. Commits updated `state.json` to prevent duplicate notifications
+2. Sends an ntfy notification when new departures become available (using repository secrets)
+3. Commits updated `state.json` with the current availability set
 
 ### Required repository secret
 

@@ -62,6 +62,10 @@ class DepartureResult:
     available: bool
     departure: dict[str, Any]
 
+    @property
+    def key(self) -> str:
+        return f"{self.date_label}|{self.route}|{self.time_label}"
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -161,7 +165,7 @@ def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
     """Load notification state from state.json."""
     if not path.exists():
         logger.info("State file not found, starting with empty state")
-        return {"notification_sent": False, "last_status": None, "last_checked": None}
+        return {"available_departures": [], "last_checked": None}
 
     try:
         with path.open(encoding="utf-8") as state_file:
@@ -174,8 +178,13 @@ def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
     if not isinstance(state, dict):
         raise ConfigError("State file must contain a JSON object.")
 
-    state.setdefault("notification_sent", False)
-    state.setdefault("last_status", None)
+    available_departures = state.get("available_departures", [])
+    if not isinstance(available_departures, list):
+        raise ConfigError("State value 'available_departures' must be an array.")
+
+    state["available_departures"] = [
+        departure for departure in available_departures if isinstance(departure, str)
+    ]
     state.setdefault("last_checked", None)
     return state
 
@@ -374,6 +383,19 @@ def get_ntfy_topic() -> str:
     return topic
 
 
+def get_available_departure_keys(results: list[DepartureResult]) -> set[str]:
+    """Return keys for all currently available departures."""
+    return {result.key for result in results if result.available}
+
+
+def find_new_departures(
+    current: set[str],
+    previous: set[str],
+) -> set[str]:
+    """Return departures that are newly available."""
+    return current - previous
+
+
 def build_notification_message(
     config: dict[str, Any],
     available_departures: str,
@@ -381,6 +403,8 @@ def build_notification_message(
     """Build the ntfy notification message body."""
     return (
         "🚢 Ameland Ferry Available\n\n"
+        "New availability detected.\n\n"
+        "Currently available departures:\n\n"
         f"{available_departures}\n\n"
         f"Vehicle: {config['licenseNumber']}"
     )
@@ -427,22 +451,26 @@ def update_state(
     notify: bool,
     config: dict[str, Any],
 ) -> None:
-    """Update state and send a notification when departures become available."""
-    available_departures = format_available_departures(results)
-    any_available = bool(available_departures)
-    status = "available" if any_available else "fully_booked"
+    """Update state and notify when new departures become available."""
+    current_available = get_available_departure_keys(results)
+    previous_available = set(state.get("available_departures", []))
+    new_departures = find_new_departures(current_available, previous_available)
 
-    if any_available and not state.get("notification_sent"):
+    if new_departures:
+        logger.info(
+            "Newly available departures: %s",
+            ", ".join(sorted(new_departures)),
+        )
         if notify:
-            send_availability_notification(config, available_departures)
-            state["notification_sent"] = True
-            logger.info("Marked departures as notified")
-    elif not any_available:
-        state["notification_sent"] = False
-        logger.info("All departures fully booked, notification flag reset")
+            available_message = format_available_departures(results)
+            send_availability_notification(config, available_message)
+            logger.info("Sent notification for new availability")
+    elif current_available != previous_available:
+        logger.info("Availability changed, but no new departures detected")
+    else:
+        logger.info("No change in available departures")
 
-    state["last_status"] = status
-    state["last_available_departures"] = available_departures
+    state["available_departures"] = sorted(current_available)
     state["last_checked"] = datetime.now().isoformat(timespec="seconds")
     save_state(state)
 
