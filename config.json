@@ -1,9 +1,14 @@
 {
-  "dates": [
-    "2026-09-11",
-    "2026-09-12"
+  "trips": [
+    {
+      "route": "HOAM",
+      "dates": ["2026-09-04"]
+    },
+    {
+      "route": "AMHO",
+      "dates": ["2026-09-11", "2026-09-12"]
+    }
   ],
-  "route": "HOAM",
   "licenseNumber": "K TW 3741",
   "vehicleLength": 5
 }

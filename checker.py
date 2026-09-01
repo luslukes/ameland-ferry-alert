@@ -23,7 +23,7 @@ STATE_PATH = Path(__file__).resolve().parent / "state.json"
 REQUEST_TIMEOUT_SECONDS = 30
 IGNORED_DEPARTURE_TIME = time(7, 15)
 
-REQUIRED_CONFIG_KEYS = ("dates", "route", "licenseNumber", "vehicleLength")
+REQUIRED_CONFIG_KEYS = ("trips", "licenseNumber", "vehicleLength")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,17 +46,22 @@ class NotificationError(Exception):
 
 
 @dataclass(frozen=True)
+class TripConfig:
+    """A route and the dates to monitor for that route."""
+
+    route: str
+    dates: list[str]
+
+
+@dataclass(frozen=True)
 class DepartureResult:
     """Availability result for a departure returned by the API."""
 
     date_label: str
     time_label: str
+    route: str
     available: bool
     departure: dict[str, Any]
-
-    @property
-    def label(self) -> str:
-        return f"{self.date_label} {self.time_label}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,23 +101,42 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
             f"Missing required configuration value(s): {', '.join(missing_keys)}"
         )
 
-    for key in ("route", "licenseNumber"):
-        value = config[key]
-        if not isinstance(value, str) or not value.strip():
-            raise ConfigError(f"Configuration value '{key}' must be a non-empty string.")
+    license_number = config["licenseNumber"]
+    if not isinstance(license_number, str) or not license_number.strip():
+        raise ConfigError("Configuration value 'licenseNumber' must be a non-empty string.")
 
-    dates = config["dates"]
-    if not isinstance(dates, list) or not dates:
-        raise ConfigError("Configuration value 'dates' must be a non-empty array.")
+    trips = config["trips"]
+    if not isinstance(trips, list) or not trips:
+        raise ConfigError("Configuration value 'trips' must be a non-empty array.")
 
-    validated_dates: list[str] = []
-    for index, date_value in enumerate(dates):
-        if not isinstance(date_value, str) or not date_value.strip():
+    validated_trips: list[TripConfig] = []
+    for index, trip in enumerate(trips):
+        if not isinstance(trip, dict):
+            raise ConfigError(f"Configuration value 'trips[{index}]' must be an object.")
+
+        route = trip.get("route")
+        if not isinstance(route, str) or not route.strip():
             raise ConfigError(
-                f"Configuration value 'dates[{index}]' must be a non-empty string."
+                f"Configuration value 'trips[{index}].route' must be a non-empty string."
             )
-        parse_date(date_value)
-        validated_dates.append(date_value)
+
+        dates = trip.get("dates")
+        if not isinstance(dates, list) or not dates:
+            raise ConfigError(
+                f"Configuration value 'trips[{index}].dates' must be a non-empty array."
+            )
+
+        validated_dates: list[str] = []
+        for date_index, date_value in enumerate(dates):
+            if not isinstance(date_value, str) or not date_value.strip():
+                raise ConfigError(
+                    "Configuration value "
+                    f"'trips[{index}].dates[{date_index}]' must be a non-empty string."
+                )
+            parse_date(date_value)
+            validated_dates.append(date_value)
+
+        validated_trips.append(TripConfig(route=route, dates=validated_dates))
 
     vehicle_length = config["vehicleLength"]
     if isinstance(vehicle_length, bool) or not isinstance(vehicle_length, (int, float)):
@@ -120,12 +144,14 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     if vehicle_length <= 0:
         raise ConfigError("Configuration value 'vehicleLength' must be greater than zero.")
 
-    config["dates"] = validated_dates
+    config["trips"] = validated_trips
 
+    trip_summary = ", ".join(
+        f"{trip.route} [{', '.join(trip.dates)}]" for trip in validated_trips
+    )
     logger.info(
-        "Configuration loaded: dates=%s, route=%s, vehicle=%s (%sm)",
-        ", ".join(config["dates"]),
-        config["route"],
+        "Configuration loaded: trips=%s, vehicle=%s (%sm)",
+        trip_summary,
         config["licenseNumber"],
         config["vehicleLength"],
     )
@@ -175,7 +201,12 @@ def parse_date(value: str) -> datetime.date:
         raise ConfigError(f"Invalid date format '{value}'. Expected YYYY-MM-DD.") from exc
 
 
-def build_api_payload(config: dict[str, Any], date: str) -> dict[str, Any]:
+def build_api_payload(
+    config: dict[str, Any],
+    *,
+    route: str,
+    date: str,
+) -> dict[str, Any]:
     """Build the request body for the WPD departures endpoint."""
     return {
         "dateTime": date,
@@ -192,17 +223,19 @@ def build_api_payload(config: dict[str, Any], date: str) -> dict[str, Any]:
                 "resourceType": "Car",
             },
         ],
-        "route": config["route"],
+        "route": route,
     }
 
 
-def fetch_departures_for_date(
+def fetch_departures_for_route_date(
     config: dict[str, Any],
+    *,
+    route: str,
     date: str,
 ) -> list[dict[str, Any]]:
-    """Call the WPD API and return departures for a single date."""
-    payload = build_api_payload(config, date)
-    logger.info("Requesting departures from %s for %s", API_URL, date)
+    """Call the WPD API and return departures for a route and date."""
+    payload = build_api_payload(config, route=route, date=date)
+    logger.info("Requesting departures from %s for %s on %s", API_URL, route, date)
 
     try:
         response = requests.post(
@@ -218,23 +251,36 @@ def fetch_departures_for_date(
     except RequestException as exc:
         raise ApiError(f"Request failed: {exc}") from exc
 
-    logger.info("API responded with HTTP %s for %s", response.status_code, date)
+    logger.info(
+        "API responded with HTTP %s for %s on %s",
+        response.status_code,
+        route,
+        date,
+    )
 
     if not response.ok:
         detail = response.text.strip() or "No response body"
         raise ApiError(
-            f"API error for {date} (HTTP {response.status_code}): {detail[:500]}"
+            f"API error for {route} on {date} "
+            f"(HTTP {response.status_code}): {detail[:500]}"
         )
 
     try:
         data = response.json()
     except json.JSONDecodeError as exc:
-        raise ApiError(f"API returned invalid JSON for {date}.") from exc
+        raise ApiError(f"API returned invalid JSON for {route} on {date}.") from exc
 
     if not isinstance(data, list):
-        raise ApiError(f"Unexpected API response for {date}: expected a JSON array.")
+        raise ApiError(
+            f"Unexpected API response for {route} on {date}: expected a JSON array."
+        )
 
-    logger.info("Received %d departure(s) from API for %s", len(data), date)
+    logger.info(
+        "Received %d departure(s) from API for %s on %s",
+        len(data),
+        route,
+        date,
+    )
     return data
 
 
@@ -256,39 +302,54 @@ def should_ignore_departure(start_dt: datetime) -> bool:
 
 
 def collect_departure_results(config: dict[str, Any]) -> list[DepartureResult]:
-    """Fetch and evaluate all API departures for the configured dates."""
+    """Fetch and evaluate all API departures for the configured trips."""
     results: list[DepartureResult] = []
 
-    for date in config["dates"]:
-        departures = fetch_departures_for_date(config, date)
-
-        for departure in departures:
-            if not isinstance(departure, dict):
-                logger.warning("Skipping non-object departure entry: %r", departure)
-                continue
-
-            if departure.get("route") != config["route"]:
-                continue
-
-            start_dt = parse_departure_start(departure)
-            if start_dt is None:
-                logger.warning("Skipping departure with invalid startDate: %s", departure)
-                continue
-
-            if should_ignore_departure(start_dt):
-                logger.info("Ignoring test departure at %s", start_dt.strftime("%H:%M"))
-                continue
-
-            results.append(
-                DepartureResult(
-                    date_label=start_dt.strftime("%Y-%m-%d"),
-                    time_label=start_dt.strftime("%H:%M"),
-                    available=departure.get("isBookable") is True,
-                    departure=departure,
-                )
+    for trip in config["trips"]:
+        for date in trip.dates:
+            departures = fetch_departures_for_route_date(
+                config,
+                route=trip.route,
+                date=date,
             )
 
-    results.sort(key=lambda result: (result.date_label, result.time_label))
+            for departure in departures:
+                if not isinstance(departure, dict):
+                    logger.warning("Skipping non-object departure entry: %r", departure)
+                    continue
+
+                if departure.get("route") != trip.route:
+                    continue
+
+                start_dt = parse_departure_start(departure)
+                if start_dt is None:
+                    logger.warning(
+                        "Skipping departure with invalid startDate: %s",
+                        departure,
+                    )
+                    continue
+
+                if should_ignore_departure(start_dt):
+                    logger.info(
+                        "Ignoring test departure at %s on %s",
+                        start_dt.strftime("%H:%M"),
+                        trip.route,
+                    )
+                    continue
+
+                results.append(
+                    DepartureResult(
+                        date_label=start_dt.strftime("%Y-%m-%d"),
+                        time_label=start_dt.strftime("%H:%M"),
+                        route=trip.route,
+                        available=departure.get("isBookable") is True,
+                        departure=departure,
+                    )
+                )
+
+    results.sort(
+        key=lambda result: (result.date_label, result.route, result.time_label)
+    )
     logger.info("Collected %d monitored departure(s)", len(results))
     return results
 
@@ -297,7 +358,26 @@ def print_results(results: list[DepartureResult]) -> None:
     """Print availability for each detected departure."""
     for result in results:
         status = "AVAILABLE" if result.available else "FULLY BOOKED"
-        print(f"{result.label} {status}")
+        print(f"{result.date_label} {result.time_label} {result.route} {status}")
+
+
+def format_available_departures(results: list[DepartureResult]) -> str:
+    """Group available departures by date and route for notifications."""
+    groups: dict[tuple[str, str], list[str]] = {}
+
+    for result in results:
+        if not result.available:
+            continue
+
+        key = (result.date_label, result.route)
+        groups.setdefault(key, []).append(result.time_label)
+
+    sections: list[str] = []
+    for date_label, route in sorted(groups):
+        times_block = "\n".join(groups[(date_label, route)])
+        sections.append(f"{date_label} ({route})\n{times_block}")
+
+    return "\n\n".join(sections)
 
 
 def get_ntfy_topic() -> str:
@@ -310,24 +390,19 @@ def get_ntfy_topic() -> str:
 
 def build_notification_message(
     config: dict[str, Any],
-    available_departures: list[str],
+    available_departures: str,
 ) -> str:
     """Build the ntfy notification message body."""
-    departures_block = "\n".join(available_departures)
-    dates_block = ", ".join(config["dates"])
     return (
         "🚢 Ameland Ferry Available\n\n"
-        "Available departures:\n\n"
-        f"{departures_block}\n\n"
-        f"Route: {config['route']}\n"
-        f"Dates: {dates_block}\n"
+        f"{available_departures}\n\n"
         f"Vehicle: {config['licenseNumber']}"
     )
 
 
 def send_availability_notification(
     config: dict[str, Any],
-    available_departures: list[str],
+    available_departures: str,
 ) -> None:
     """Send an ntfy notification listing available departures."""
     topic = get_ntfy_topic()
@@ -367,7 +442,7 @@ def update_state(
     config: dict[str, Any],
 ) -> None:
     """Update state and send a notification when departures become available."""
-    available_departures = [result.label for result in results if result.available]
+    available_departures = format_available_departures(results)
     any_available = bool(available_departures)
     status = "available" if any_available else "fully_booked"
 

@@ -30,15 +30,20 @@ Monitor Ameland ferry departures and get notified when vehicle slots become avai
 
 ## Configuration
 
-Edit `config.json` to set the dates and vehicle to monitor:
+Edit `config.json` to set the routes, dates, and vehicle to monitor:
 
 ```json
 {
-  "dates": [
-    "2026-09-11",
-    "2026-09-12"
+  "trips": [
+    {
+      "route": "HOAM",
+      "dates": ["2026-09-04"]
+    },
+    {
+      "route": "AMHO",
+      "dates": ["2026-09-11", "2026-09-12"]
+    }
   ],
-  "route": "HOAM",
   "licenseNumber": "K TW 3741",
   "vehicleLength": 5
 }
@@ -46,12 +51,13 @@ Edit `config.json` to set the dates and vehicle to monitor:
 
 | Field           | Description                                        |
 |-----------------|----------------------------------------------------|
-| `dates`         | List of travel dates to monitor (`YYYY-MM-DD`)     |
-| `route`         | Ferry route code (e.g. `HOAM` for Holwerd–Ameland) |
+| `trips`         | List of route/date combinations to monitor         |
+| `trips[].route` | Ferry route code (`HOAM` outbound, `AMHO` return)    |
+| `trips[].dates` | Travel dates for that route (`YYYY-MM-DD`)         |
 | `licenseNumber` | Vehicle license plate as used on the WPD website   |
 | `vehicleLength` | Vehicle length in metres                           |
 
-The monitor reads all departures returned by the WPD API for each configured date. Departure times are taken from `startDate`, and availability from `isBookable`. The `07:15` departure is ignored because it was only used for testing.
+For every configured date and route, the monitor queries the WPD API and reads all returned departures. Departure times come from `startDate`, and availability from `isBookable`. The `07:15` departure is ignored because it was only used for testing.
 
 ## Execution
 
@@ -64,7 +70,7 @@ python checker.py
 The script will:
 
 1. Load `config.json`
-2. Query the WPD API for each configured date and route
+2. Query the WPD API for each configured route and date
 3. Read all returned departures and ignore `07:15`
 4. Print availability for each detected departure
 5. Update `state.json` to track notification status
@@ -79,11 +85,10 @@ The script will:
 ### Example output
 
 ```
-2026-09-11 08:30 FULLY BOOKED
-2026-09-11 09:45 FULLY BOOKED
-2026-09-11 11:00 FULLY BOOKED
-2026-09-12 08:30 AVAILABLE
-2026-09-12 09:45 FULLY BOOKED
+2026-09-04 08:30 HOAM FULLY BOOKED
+2026-09-04 09:45 HOAM FULLY BOOKED
+2026-09-11 08:30 AMHO FULLY BOOKED
+2026-09-12 09:45 AMHO AVAILABLE
 ```
 
 ## Notifications
@@ -100,18 +105,22 @@ Set this environment variable:
 |--------------|--------------------------------------|
 | `NTFY_TOPIC` | Your ntfy.sh topic name              |
 
-Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` with this message:
+Notifications are sent via HTTP POST to `https://ntfy.sh/<topic>` with available departures grouped by date and route:
 
 ```
 🚢 Ameland Ferry Available
 
-Available departures:
+2026-09-04 (HOAM)
+11:00
+13:30
 
-2026-09-12 08:30
-2026-09-12 13:30
+2026-09-11 (AMHO)
+14:45
 
-Route: HOAM
-Dates: 2026-09-11, 2026-09-12
+2026-09-12 (AMHO)
+09:45
+16:00
+
 Vehicle: K TW 3741
 ```
 
@@ -123,9 +132,9 @@ Notifications are sent only when at least one departure is bookable and `notific
 
 ## GitHub Actions
 
-A workflow in `.github/workflows/monitor.yml` runs every 10 minutes and:
+A workflow in `.github/workflows/monitor.yml` runs every 15 minutes and:
 
-1. Checks all API departures for the configured dates
+1. Checks all API departures for the configured routes and dates
 2. Sends one ntfy notification if any become available (using repository secrets)
 3. Commits updated `state.json` to prevent duplicate notifications
 
