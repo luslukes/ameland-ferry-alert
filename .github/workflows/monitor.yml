@@ -33,11 +33,4 @@ jobs:
           if [ "$exit_code" -eq 2 ]; then
             exit 2
           fi
-
-      - name: Commit state changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add state.json
-          git diff --staged --quiet || git commit -m "Update ferry monitor state"
-          git push
+  
